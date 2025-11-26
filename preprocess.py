@@ -47,7 +47,7 @@ def load_split_lists():
 
 
 def get_split(rel_path, val_set, test_set):
-    """Return 'train', 'val', or 'test' for a given file."""
+    #Return 'train', 'val', or 'test' for a given file.
     if rel_path in val_set:
         return "val"
     elif rel_path in test_set:
@@ -56,7 +56,7 @@ def get_split(rel_path, val_set, test_set):
         return "train"
 
 def load_and_pad(path):
-    """Load audio, resample, and pad/trim to exactly 1 second."""
+    #Load audio, resample, and pad/trim to exactly 1 second.
     y, sr = librosa.load(path, sr=SR)
     if len(y) > TARGET_LEN:
         y = y[:TARGET_LEN]
@@ -67,7 +67,7 @@ def load_and_pad(path):
 
 
 def compute_logmel(audio):
-    """Compute log-Mel spectrogram."""
+    #Compute log-Mel spectrogram.
     mel = librosa.feature.melspectrogram(
         y=audio,
         sr=SR,
@@ -85,7 +85,7 @@ def compute_logmel(audio):
 
 
 def generate_silence_example():
-    """Return one second of silence."""
+    #Return one second of silence.
     return np.zeros(TARGET_LEN, dtype=np.float32)
 
 
@@ -131,7 +131,7 @@ def main():
         features[split].append(logmel)
         labels[split].append(label_id)
 
-    # 2) Add some synthetic silence examples (1000 per split)
+    # 2) Synthetic silence examples (1000 per split)
     silence_per_split = 1000
     print(f"Adding {silence_per_split} silence examples per split...")
 

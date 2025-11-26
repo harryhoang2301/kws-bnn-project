@@ -6,7 +6,6 @@ import tensorflow as tf
 from sklearn.metrics import confusion_matrix
 
 # Paths
-
 TEST_PATH  = Path("data/processed/logmel_test.npz")
 STATS_PATH = Path("data/processed/logmel_stats.npz")
 
@@ -18,7 +17,6 @@ FIG_DIR.mkdir(parents=True, exist_ok=True)
 FIG_PATH = FIG_DIR / "confusion_matrix.png"
 
 # Load data & model
-
 print("[INFO] Loading test data...")
 test_data  = np.load(TEST_PATH)
 x_test, y_test = test_data["x"], test_data["y"]
@@ -39,13 +37,11 @@ print("[INFO] Loading model:", MODEL_PATH)
 model = tf.keras.models.load_model(MODEL_PATH)
 
 # Predict on test set
-
 print("[INFO] Running predictions...")
 y_pred_probs = model.predict(x_test, batch_size=64, verbose=1)
 y_pred = np.argmax(y_pred_probs, axis=1)
 
 # Build confusion matrix
-
 cm = confusion_matrix(y_test, y_pred, labels=range(num_classes))
 print("[INFO] Confusion matrix shape:", cm.shape)
 
@@ -53,7 +49,6 @@ print("[INFO] Confusion matrix shape:", cm.shape)
 cm_norm = cm.astype("float32") / cm.sum(axis=1, keepdims=True)
 
 # Plot confusion matrix
-
 fig, ax = plt.subplots(figsize=(8, 8))
 im = ax.imshow(cm_norm, interpolation="nearest", cmap="Blues")
 
