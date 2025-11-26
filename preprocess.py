@@ -1,13 +1,9 @@
-import os
 from pathlib import Path
-
 import numpy as np
 import librosa
 from tqdm import tqdm
 
-# -----------------------
 # BASIC SETTINGS
-# -----------------------
 
 # Path to your dataset root
 DATA_ROOT = Path("data/raw/speech_commands_v2")
@@ -184,7 +180,6 @@ def main():
 
     print("Saved files in:", OUT_DIR.resolve())
     print("Done!")
-
 
 if __name__ == "__main__":
     main()
