@@ -1,12 +1,10 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
-
 from pathlib import Path
 
-# -----------------------
+
 # 1. Load preprocessed data
-# -----------------------
 
 # Paths to your .npz files (adjust if needed)
 TRAIN_PATH = Path("data/processed/logmel_train.npz")
@@ -52,9 +50,7 @@ y_train = y_train.astype("int32")
 y_val   = y_val.astype("int32")
 y_test  = y_test.astype("int32")
 
-# -----------------------
 # 3. Build a simple CNN model
-# -----------------------
 # Input:  (40, 101, 1)
 # Output: probabilities over num_classes
 
@@ -87,9 +83,7 @@ model = models.Sequential([
 
 model.summary()
 
-# -----------------------
 # 4. Compile the model
-# -----------------------
 
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
@@ -97,9 +91,7 @@ model.compile(
     metrics=["accuracy"],
 )
 
-# -----------------------
 # 5. Train the model
-# -----------------------
 
 batch_size = 64
 epochs = 20
@@ -121,18 +113,14 @@ history = model.fit(
     callbacks=[early_stop],
 )
 
-# -----------------------
 # 6. Evaluate on test set
-# -----------------------
 
 print("[INFO] Evaluating on test set...")
 test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
 print(f"[RESULT] Test accuracy: {test_acc * 100:.2f}%")
 print(f"[RESULT] Test loss: {test_loss:.4f}")
 
-# -----------------------
 # 7. Save the model
-# -----------------------
 
 MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,9 +134,7 @@ test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
 print(f"[RESULT] Test accuracy: {test_acc * 100:.2f}%")
 print(f"[RESULT] Test loss: {test_loss:.4f}")
 
-# -----------------------
 # Plot training curves
-# -----------------------
 
 import matplotlib.pyplot as plt
 

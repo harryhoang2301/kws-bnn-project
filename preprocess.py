@@ -1,26 +1,27 @@
 from pathlib import Path
 import numpy as np
 import librosa
+import librosa.feature
 from tqdm import tqdm
 
-# BASIC SETTINGS
+# SETTINGS
 
 # Path to your dataset root
 DATA_ROOT = Path("data/raw/speech_commands_v2")
 OUT_DIR = Path("data/processed")
 
-# Audio settings
+# Audio
 SR = 16000        # sample rate (Hz)
 DURATION = 1.0    # seconds
 TARGET_LEN = int(SR * DURATION)
 
-# Log-Mel settings
+# Log-Mel
 N_MELS = 40
 N_FFT = 512
 HOP_LENGTH = int(0.01 * SR)   # 10 ms
 WIN_LENGTH = int(0.025 * SR)  # 25 ms
 
-# Classes we care about
+# 10 Classes
 KEYWORDS = [
     "yes", "no", "up", "down", "left", "right",
     "on", "off", "stop", "go",
@@ -30,12 +31,9 @@ CLASS_NAMES = KEYWORDS + ["unknown", "silence"]
 CLASS_TO_ID = {name: i for i, name in enumerate(CLASS_NAMES)}
 
 
-# -----------------------
 # HELPER FUNCTIONS
-# -----------------------
 
 def load_split_lists():
-    """Read validation_list.txt and testing_list.txt."""
     val_path = DATA_ROOT / "validation_list.txt"
     test_path = DATA_ROOT / "testing_list.txt"
 
@@ -56,7 +54,6 @@ def get_split(rel_path, val_set, test_set):
         return "test"
     else:
         return "train"
-
 
 def load_and_pad(path):
     """Load audio, resample, and pad/trim to exactly 1 second."""
@@ -92,9 +89,7 @@ def generate_silence_example():
     return np.zeros(TARGET_LEN, dtype=np.float32)
 
 
-# -----------------------
-# MAIN LOGIC
-# -----------------------
+# -----MAIN LOGIC--------
 
 def main():
     print(f"Using dataset at: {DATA_ROOT.resolve()}")
@@ -148,33 +143,33 @@ def main():
             labels[split].append(CLASS_TO_ID["silence"])
 
     # 3) Turn lists into arrays
-    X_train = np.stack(features["train"], axis=0)
+    x_train = np.stack(features["train"], axis=0)
     y_train = np.array(labels["train"], dtype=np.int64)
 
-    X_val = np.stack(features["val"], axis=0)
+    x_val = np.stack(features["val"], axis=0)
     y_val = np.array(labels["val"], dtype=np.int64)
 
-    X_test = np.stack(features["test"], axis=0)
+    x_test = np.stack(features["test"], axis=0)
     y_test = np.array(labels["test"], dtype=np.int64)
 
     print("Shapes BEFORE normalisation:")
-    print("  Train:", X_train.shape)
-    print("  Val:  ", X_val.shape)
-    print("  Test: ", X_test.shape)
+    print("  Train:", x_train.shape)
+    print("  Val:  ", x_val.shape)
+    print("  Test: ", x_test.shape)
 
     # 4) Compute mean/std from TRAIN only (for normalisation)
-    mean = X_train.mean(axis=(0, 2), keepdims=True)
-    std = X_train.std(axis=(0, 2), keepdims=True) + 1e-6
+    mean = x_train.mean(axis=(0, 2), keepdims=True)
+    std = x_train.std(axis=(0, 2), keepdims=True) + 1e-6
 
     # 5) Apply normalisation
-    X_train = (X_train - mean) / std
-    X_val = (X_val - mean) / std
-    X_test = (X_test - mean) / std
+    x_train = (x_train - mean) / std
+    x_val = (x_val - mean) / std
+    x_test = (x_test - mean) / std
 
     # 6) Save everything to .npz files
-    np.savez_compressed(OUT_DIR / "logmel_train.npz", x=X_train, y=y_train)
-    np.savez_compressed(OUT_DIR / "logmel_val.npz", x=X_val, y=y_val)
-    np.savez_compressed(OUT_DIR / "logmel_test.npz", x=X_test, y=y_test)
+    np.savez_compressed(OUT_DIR / "logmel_train.npz", x=x_train, y=y_train)
+    np.savez_compressed(OUT_DIR / "logmel_val.npz", x=x_val, y=y_val)
+    np.savez_compressed(OUT_DIR / "logmel_test.npz", x=x_test, y=y_test)
     np.savez_compressed(OUT_DIR / "logmel_stats.npz",
                         mean=mean, std=std, class_names=np.array(CLASS_NAMES))
 
