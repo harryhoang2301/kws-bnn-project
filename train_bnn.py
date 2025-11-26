@@ -119,24 +119,6 @@ class BinaryConv2D(layers.Layer):
         )
         return out
 
-
-# -----------------------
-# (Optional) Tiny test BNN model - not used for main training
-# -----------------------
-# def build_tiny_bnn():
-#     model = models.Sequential([
-#         layers.Flatten(input_shape=(40, 101, 1)),
-#         BinaryDense(128),
-#         layers.BatchNormalization(),
-#         BinaryActivation(),
-#         layers.Dense(num_classes, activation="softmax")  # final layer full precision
-#     ])
-#     return model
-#
-# tiny_model = build_tiny_bnn()
-# tiny_model.summary()
-
-
 # -----------------------
 # Full BNN model (wider CNN-like)
 # -----------------------
