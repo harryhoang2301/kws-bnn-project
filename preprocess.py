@@ -31,7 +31,7 @@ CLASS_NAMES = KEYWORDS + ["unknown", "silence"]
 CLASS_TO_ID = {name: i for i, name in enumerate(CLASS_NAMES)}
 
 
-# HELPER FUNCTIONS
+# FUNCTIONS
 
 def load_split_lists():
     val_path = DATA_ROOT / "validation_list.txt"

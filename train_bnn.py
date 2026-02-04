@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import tensorflow as tf
 from tensorflow.keras import layers, models
+from bnn_layers import BinaryActivation, BinaryDense, BinaryConv2D
 
 # Load data
 
@@ -36,89 +37,6 @@ y_test  = y_test.astype("int32")
 
 print("[INFO] Data loaded successfully.")
 
-# Binarisation + STE
-@tf.custom_gradient
-def binary_activation(x):
-    """
-    Forward pass: sign(x)
-    Backward pass: Straight-Through Estimator (STE) with HardTanh-style gradient.
-    """
-    y = tf.sign(x)
-    # Ensure 0 to +1 (TensorFlow's sign can give 0)
-    y = tf.where(tf.equal(y, 0), tf.ones_like(y), y)
-
-    def grad(dy):
-        # smoother gradient in range [-1, 1]
-        mask = tf.cast(tf.abs(x) <= 1.0, dy.dtype)
-        dx = dy * mask * 0.5
-        return dx
-
-    return y, grad
-
-
-class BinaryActivation(layers.Layer):
-    def call(self, inputs):
-        return binary_activation(inputs)
-
-
-class BinaryDense(layers.Layer):
-    def __init__(self, units):
-        super().__init__()
-        self.units = units
-
-    def build(self, input_shape):
-        init = tf.random_normal_initializer(stddev=0.1)
-        self.w = self.add_weight(
-            shape=(int(input_shape[-1]), self.units),
-            initializer=init,
-            trainable=True,
-            name="w_fp"
-        )
-
-    def call(self, inputs):
-        # Binarise weights and inputs
-        w_bin = binary_activation(self.w)
-        x_bin = binary_activation(inputs)
-        out = tf.matmul(x_bin, w_bin)
-        return out
-
-
-class BinaryConv2D(layers.Layer):
-    def __init__(self, filters, kernel_size, strides=(1, 1), padding="same"):
-        super().__init__()
-        self.filters = filters
-        self.kernel_size = (
-            kernel_size if isinstance(kernel_size, tuple)
-            else (kernel_size, kernel_size)
-        )
-        self.strides = strides
-        self.padding = padding.upper()  # "SAME" or "VALID"
-
-    def build(self, input_shape):
-        in_channels = int(input_shape[-1])
-        kh, kw = self.kernel_size
-
-        init = tf.random_normal_initializer(stddev=0.1)
-        self.w = self.add_weight(
-            shape=(kh, kw, in_channels, self.filters),
-            initializer=init,
-            trainable=True,
-            name="w_fp"
-        )
-
-    def call(self, inputs):
-        # Binarise weights and inputs
-        w_bin = binary_activation(self.w)
-        x_bin = binary_activation(inputs)
-
-        out = tf.nn.conv2d(
-            x_bin,
-            w_bin,
-            strides=(1, self.strides[0], self.strides[1], 1),
-            padding=self.padding,
-        )
-        return out
-
 # -----------------------
 # Full BNN model (wider CNN-like)
 # -----------------------
@@ -129,33 +47,30 @@ def build_bnn_model():
     # -------------------------
     # Float front-end
     # -------------------------
-    # Widen from 16 -> 32 filters for better capacity
-    x = layers.Conv2D(32, (3, 3), padding="same", use_bias=False)(inputs)
+    x = layers.Conv2D(16, (3, 3), padding="same", use_bias=False)(inputs)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)      # first binarisation
 
     # -------------------------
     # Binary block 1 (wider)
     # -------------------------
-    x = BinaryConv2D(64, (3, 3), padding="same")(x)
+    x = BinaryConv2D(32, (3, 3), padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.AvgPool2D((2, 2))(x)
 
     # -------------------------
     # Binary block 2 (wider)
     # -------------------------
-    x = BinaryConv2D(128, (3, 3), padding="same")(x)
+    x = BinaryConv2D(64, (3, 3), padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.AvgPool2D((2, 2))(x)
 
     # -------------------------
     # Classifier
     # -------------------------
     x = layers.Flatten()(x)
-
-    # Wider binary dense: 128 units
     x = BinaryDense(128)(x)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
@@ -169,7 +84,7 @@ model = build_bnn_model()
 model.summary()
 
 optimizer = tf.keras.optimizers.Adam(
-    learning_rate=5e-5,
+    learning_rate=1e-4,
     epsilon=1e-5,   # slightly smaller eps helps BNN stability
 )
 
@@ -204,8 +119,8 @@ print(f"[RESULT] BNN Test loss: {test_loss:.4f}")
 # save the BNN
 MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
-model.save(MODEL_DIR / "bnn_kws_v2.keras")
-print(f"[INFO] Saved upgraded BNN to: { (MODEL_DIR / 'bnn_kws_v2.keras').resolve() }")
+model.save(MODEL_DIR/"bnn_kws_v2_registered.keras", include_optimizer=False)
+print(f"[INFO] Saved upgraded BNN to: { (MODEL_DIR / 'bnn_kws_v2_registered.keras').resolve() }")
 
 # Plot training curves (BNN)
 history_dict = history.history
