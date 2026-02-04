@@ -8,10 +8,8 @@ __pycache__/
 
 # Data
 data/raw/
-data/processed/
 
-# Models
-models/
+
 
 # PyCharm project files
 .idea/
