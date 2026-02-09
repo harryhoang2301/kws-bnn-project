@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import tensorflow as tf
-from tensorflow.keras import layers, models
+from keras import layers, models
 from bnn_layers import BinaryActivation, BinaryDense, BinaryConv2D
 
 # Load data
@@ -37,47 +37,39 @@ y_test  = y_test.astype("int32")
 
 print("[INFO] Data loaded successfully.")
 
-# -----------------------
-# Full BNN model (wider CNN-like)
-# -----------------------
+# ----------------------------------------------
+# BNN model (weight and activation binarization)
+# ----------------------------------------------
 
 def build_bnn_model():
     inputs = layers.Input(shape=(40, 101, 1))
 
-    # -------------------------
-    # Float front-end
-    # -------------------------
+    # Block 1 (full-precision conv)
     x = layers.Conv2D(16, (3, 3), padding="same", use_bias=False)(inputs)
     x = layers.BatchNormalization()(x)
-    x = BinaryActivation()(x)      # first binarisation
+    x = BinaryActivation()(x)
 
-    # -------------------------
-    # Binary block 1 (wider)
-    # -------------------------
+    # Block 2 (binary conv)
     x = BinaryConv2D(32, (3, 3), padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
 
-    # -------------------------
-    # Binary block 2 (wider)
-    # -------------------------
+    # Block 3 (binary conv)
     x = BinaryConv2D(64, (3, 3), padding="same")(x)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
 
-    # -------------------------
     # Classifier
-    # -------------------------
     x = layers.Flatten()(x)
-    x = BinaryDense(128)(x)
+    x = BinaryDense(128, activation=None)(x)
     x = layers.BatchNormalization()(x)
-    x = BinaryActivation()(x)
+    x = layers.ReLU()(x)
 
-    outputs = layers.Dense(num_classes, activation="softmax")(x)
-
+    outputs = layers.Dense(num_classes, activation="softmax", name="softmax")(x)
     return models.Model(inputs, outputs)
+
 
 # Build and train BNN
 model = build_bnn_model()
@@ -90,8 +82,8 @@ optimizer = tf.keras.optimizers.Adam(
 
 model.compile(
     optimizer=optimizer,
-    loss="sparse_categorical_crossentropy",
-    metrics=["accuracy"],
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+    metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
 )
 
 batch_size = 64
