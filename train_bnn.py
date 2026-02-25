@@ -5,43 +5,11 @@ import tensorflow as tf
 from keras import layers, models
 from bnn_layers import BinaryActivation, BinaryDense, BinaryConv2D
 
-# Load data
-
-TRAIN_PATH = Path("data/processed/logmel_train.npz")
-VAL_PATH   = Path("data/processed/logmel_val.npz")
-TEST_PATH  = Path("data/processed/logmel_test.npz")
-STATS_PATH = Path("data/processed/logmel_stats.npz")
-
-print("[INFO] Loading data...")
-
-train_data = np.load(TRAIN_PATH)
-val_data   = np.load(VAL_PATH)
-test_data  = np.load(TEST_PATH)
-stats_data = np.load(STATS_PATH, allow_pickle=True)
-
-x_train, y_train = train_data["x"], train_data["y"]
-x_val, y_val     = val_data["x"], val_data["y"]
-x_test, y_test   = test_data["x"], test_data["y"]
-
-class_names = stats_data["class_names"]
-num_classes = len(class_names)
-
-# Add channel dimension
-x_train = x_train[..., np.newaxis].astype("float32")
-x_val   = x_val[..., np.newaxis].astype("float32")
-x_test  = x_test[..., np.newaxis].astype("float32")
-
-y_train = y_train.astype("int32")
-y_val   = y_val.astype("int32")
-y_test  = y_test.astype("int32")
-
-print("[INFO] Data loaded successfully.")
-
 # ----------------------------------------------
 # BNN model (weight and activation binarization)
 # ----------------------------------------------
 
-def build_bnn_model():
+def build_bnn_model(num_classes):
     inputs = layers.Input(shape=(40, 101, 1))
 
     # Block 1 (full-precision conv)
@@ -70,85 +38,129 @@ def build_bnn_model():
     outputs = layers.Dense(num_classes, activation="softmax", name="softmax")(x)
     return models.Model(inputs, outputs)
 
+def load_data(path, keys, allow_pickle=False):
+    """
+    Eagerly load requested keys from .npz and close the zip file immediately.
+    This avoids lazy reads later in training and surfaces corruption early.
+    """
+    try:
+        with np.load(path, allow_pickle=allow_pickle) as data:
+            return tuple(np.array(data[k]) for k in keys)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to read '{path}'. The file may be incomplete/corrupted. "
+            "Try regenerating processed data with preprocess.py."
+        ) from exc
 
-# Build and train BNN
-model = build_bnn_model()
-model.summary()
 
-optimizer = tf.keras.optimizers.Adam(
-    learning_rate=1e-4,
-    epsilon=1e-5,   # slightly smaller eps helps BNN stability
-)
+def main():
+    # Load data
+    train_path = Path("data/processed/logmel_train.npz")
+    val_path = Path("data/processed/logmel_val.npz")
+    test_path = Path("data/processed/logmel_test.npz")
+    stats_path = Path("data/processed/logmel_stats.npz")
 
-model.compile(
-    optimizer=optimizer,
-    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
-    metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
-)
+    print("[INFO] Loading data...")
 
-batch_size = 64
-epochs = 20
+    x_train, y_train = load_data(train_path, ("x", "y"))
+    x_val, y_val = load_data(val_path, ("x", "y"))
+    x_test, y_test = load_data(test_path, ("x", "y"))
+    (class_names,) = load_data(stats_path, ("class_names",), allow_pickle=True)
+    num_classes = len(class_names)
 
-early_stop = tf.keras.callbacks.EarlyStopping(
-    monitor="val_accuracy",
-    patience=5,
-    restore_best_weights=True,
-)
+    # Add channel dimension
+    x_train = x_train[..., np.newaxis].astype("float32")
+    x_val = x_val[..., np.newaxis].astype("float32")
+    x_test = x_test[..., np.newaxis].astype("float32")
 
-history = model.fit(
-    x_train, y_train,
-    validation_data=(x_val, y_val),
-    batch_size=batch_size,
-    epochs=epochs,
-    callbacks=[early_stop],
-)
+    y_train = y_train.astype("int32")
+    y_val = y_val.astype("int32")
+    y_test = y_test.astype("int32")
 
-print("[INFO] Evaluating BNN on test set...")
-test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
-print(f"[RESULT] BNN Test accuracy: {test_acc * 100:.2f}%")
-print(f"[RESULT] BNN Test loss: {test_loss:.4f}")
+    print("[INFO] Data loaded successfully.")
 
-# save the BNN
-MODEL_DIR = Path("models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-model.save(MODEL_DIR/"bnn_kws_v2_registered.keras", include_optimizer=False)
-print(f"[INFO] Saved upgraded BNN to: { (MODEL_DIR / 'bnn_kws_v2_registered.keras').resolve() }")
+    # Build and train BNN
+    model = build_bnn_model(num_classes)
+    model.summary()
 
-# Plot training curves (BNN)
-history_dict = history.history
-acc      = history_dict.get("accuracy", [])
-val_acc  = history_dict.get("val_accuracy", [])
-loss     = history_dict.get("loss", [])
-val_loss = history_dict.get("val_loss", [])
+    optimizer = tf.keras.optimizers.Adam(
+        learning_rate=1e-3,
+        epsilon=1e-5,   # slightly smaller eps helps BNN stability
+    )
 
-epochs_range = range(1, len(acc) + 1)
+    model.compile(
+        optimizer=optimizer,
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
+        metrics=[tf.keras.metrics.SparseCategoricalAccuracy(name="accuracy")],
+    )
 
-plt.figure(figsize=(10, 4))
+    batch_size = 64
+    epochs = 20
 
-# Accuracy plot
-plt.subplot(1, 2, 1)
-plt.plot(epochs_range, acc, label="Train Accuracy")
-plt.plot(epochs_range, val_acc, label="Val Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.title("BNN Training vs Validation Accuracy")
-plt.legend()
-plt.grid(True)
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor="val_accuracy",
+        patience=5,
+        restore_best_weights=True,
+    )
 
-# Loss plot
-plt.subplot(1, 2, 2)
-plt.plot(epochs_range, loss, label="Train Loss")
-plt.plot(epochs_range, val_loss, label="Val Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("BNN Training vs Validation Loss")
-plt.legend()
-plt.grid(True)
+    history = model.fit(
+        x_train, y_train,
+        validation_data=(x_val, y_val),
+        batch_size=batch_size,
+        epochs=epochs,
+        callbacks=[early_stop],
+    )
 
-plt.tight_layout()
-plt.show()
+    print("[INFO] Evaluating BNN on test set...")
+    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+    print(f"[RESULT] BNN Test accuracy: {test_acc * 100:.2f}%")
+    print(f"[RESULT] BNN Test loss: {test_loss:.4f}")
 
-FIG_DIR = Path("figures")
-FIG_DIR.mkdir(parents=True, exist_ok=True)
-plt.savefig(FIG_DIR / "bnn_training_curves.png", dpi=300)
-print(f"[INFO] Saved BNN training curves to: { (FIG_DIR / 'bnn_training_curves.png').resolve() }")
+    # save the BNN
+    model_dir = Path("models")
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model.save_weights(model_dir / "bnn_kws_v2_registered.weights.h5")
+    print(f"[INFO] Saved BNN weights to: {(model_dir / 'bnn_kws_v2_registered.weights.h5').resolve()}")
+
+    # Plot training curves (BNN)
+    history_dict = history.history
+    acc = history_dict.get("accuracy", [])
+    val_acc = history_dict.get("val_accuracy", [])
+    loss = history_dict.get("loss", [])
+    val_loss = history_dict.get("val_loss", [])
+
+    epochs_range = range(1, len(acc) + 1)
+
+    plt.figure(figsize=(10, 4))
+
+    # Accuracy plot
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs_range, acc, label="Train Accuracy")
+    plt.plot(epochs_range, val_acc, label="Val Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title("BNN Training vs Validation Accuracy")
+    plt.legend()
+    plt.grid(True)
+
+    # Loss plot
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs_range, loss, label="Train Loss")
+    plt.plot(epochs_range, val_loss, label="Val Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("BNN Training vs Validation Loss")
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    fig_dir = Path("figures")
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    plt.savefig(fig_dir / "bnn_training_curves.png", dpi=300)
+    print(f"[INFO] Saved BNN training curves to: {(fig_dir / 'bnn_training_curves.png').resolve()}")
+
+
+if __name__ == "__main__":
+    main()
