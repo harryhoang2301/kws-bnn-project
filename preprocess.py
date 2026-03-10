@@ -1,73 +1,64 @@
 from pathlib import Path
+import json
+
 import numpy as np
 import librosa
 import librosa.feature
 from tqdm import tqdm
 
 # SETTINGS
-
-# Path to your dataset root
 DATA_ROOT = Path("data/raw/speech_commands_v2")
 OUT_DIR = Path("data/processed")
+SEED = 0
 
 # Audio
-SR = 16000        # sample rate (Hz)
-DURATION = 1.0    # seconds
+SR = 16000
+DURATION = 1.0
 TARGET_LEN = int(SR * DURATION)
 
 # Log-Mel
 N_MELS = 40
 N_FFT = 512
-HOP_LENGTH = int(0.01 * SR)   # 10 ms
-WIN_LENGTH = int(0.025 * SR)  # 25 ms
+HOP_LENGTH = int(0.01 * SR)
+WIN_LENGTH = int(0.025 * SR)
 
-# 10 Classes
-KEYWORDS = [
-    "yes", "no", "up", "down", "left", "right",
-    "on", "off", "stop", "go",
+# Split ratios
+SPLIT_ORDER = ["train", "val", "test"]
+SPLIT_RATIOS = {"train": 0.80, "val": 0.10, "test": 0.10}
+
+BASE_KEYWORDS = [
+    "yes",
+    "no",
+    "up",
+    "down",
+    "left",
+    "right",
+    "on",
+    "off",
+    "stop",
+    "go",
+    "unknown",
+    "silence",
 ]
-
-CLASS_NAMES = KEYWORDS + ["unknown", "silence"]
+NEW_KEYWORDS = ["zero", "one", "two", "three"]
+CLASS_NAMES = BASE_KEYWORDS + NEW_KEYWORDS
 CLASS_TO_ID = {name: i for i, name in enumerate(CLASS_NAMES)}
 
-
-# FUNCTIONS
-
-def load_split_lists():
-    val_path = DATA_ROOT / "validation_list.txt"
-    test_path = DATA_ROOT / "testing_list.txt"
-
-    if not val_path.exists() or not test_path.exists():
-        raise FileNotFoundError("validation_list.txt or testing_list.txt not found.")
-
-    val_list = val_path.read_text().strip().splitlines()
-    test_list = test_path.read_text().strip().splitlines()
-
-    return set(val_list), set(test_list)
+# Regular keywords used to compute median reference for unknown/silence caps.
+REGULAR_KEYWORDS = BASE_KEYWORDS[:-2] + NEW_KEYWORDS  # yes..go + zero..three (14 classes)
+DOMINANCE_WARN_THRESHOLD = 0.40
 
 
-def get_split(rel_path, val_set, test_set):
-    #Return 'train', 'val', or 'test' for a given file.
-    if rel_path in val_set:
-        return "val"
-    elif rel_path in test_set:
-        return "test"
-    else:
-        return "train"
-
-def load_and_pad(path):
-    #Load audio, resample, and pad/trim to exactly 1 second.
-    y, sr = librosa.load(path, sr=SR)
+def load_and_pad(path: Path) -> np.ndarray:
+    y, _ = librosa.load(path, sr=SR)
     if len(y) > TARGET_LEN:
         y = y[:TARGET_LEN]
     elif len(y) < TARGET_LEN:
-        pad_width = TARGET_LEN - len(y)
-        y = np.pad(y, (0, pad_width))
+        y = np.pad(y, (0, TARGET_LEN - len(y)))
     return y.astype(np.float32)
 
 
-def compute_logmel(audio):
-    #Compute log-Mel spectrogram.
+def compute_logmel(audio: np.ndarray) -> np.ndarray:
     mel = librosa.feature.melspectrogram(
         y=audio,
         sr=SR,
@@ -80,101 +71,175 @@ def compute_logmel(audio):
         fmax=SR / 2,
         power=2.0,
     )
-    log_mel = librosa.power_to_db(mel, ref=np.max)
-    return log_mel.astype(np.float32)
+    return librosa.power_to_db(mel, ref=np.max).astype(np.float32)
 
 
-def generate_silence_example():
-    #Return one second of silence.
+def generate_silence_example() -> np.ndarray:
+    # Keep legacy synthetic silence behavior for compatibility.
     return np.zeros(TARGET_LEN, dtype=np.float32)
 
 
-# -----MAIN LOGIC--------
+def label_name_from_word(word: str) -> str:
+    if word in BASE_KEYWORDS and word not in {"unknown", "silence"}:
+        return word
+    if word in NEW_KEYWORDS:
+        return word
+    return "unknown"
 
-def main():
+
+def split_counts(total_count: int) -> dict:
+    exact = {k: total_count * SPLIT_RATIOS[k] for k in SPLIT_ORDER}
+    base = {k: int(np.floor(v)) for k, v in exact.items()}
+    remainder = total_count - sum(base.values())
+    if remainder > 0:
+        ranked = sorted(SPLIT_ORDER, key=lambda k: (exact[k] - base[k]), reverse=True)
+        for i in range(remainder):
+            base[ranked[i]] += 1
+    return base
+
+
+def sample_list(items: list, n: int, rng: np.random.Generator) -> list:
+    if n <= 0:
+        return []
+    if len(items) == 0:
+        return []
+    n = min(n, len(items))
+    idx = rng.permutation(len(items))[:n]
+    return [items[i] for i in idx]
+
+
+def class_counts(y: np.ndarray, num_classes: int) -> np.ndarray:
+    return np.bincount(y, minlength=num_classes).astype(np.int64)
+
+
+def print_split_stats(split_name: str, y: np.ndarray) -> dict:
+    counts = class_counts(y, len(CLASS_NAMES))
+    total = int(len(y))
+    out = {"total": total, "classes": {}}
+    print(f"\n[STATS] {split_name}: total={total}")
+    for i, name in enumerate(CLASS_NAMES):
+        c = int(counts[i])
+        pct = float(c / total) if total > 0 else 0.0
+        out["classes"][name] = {"count": c, "pct": pct}
+        print(f"  {i:2d} {name:10s} count={c:6d} pct={pct*100:6.2f}%")
+
+    unk = int(counts[CLASS_TO_ID["unknown"]])
+    sil = int(counts[CLASS_TO_ID["silence"]])
+    dom = (unk + sil) / float(total) if total > 0 else 0.0
+    out["unknown_silence_share"] = dom
+    if dom > DOMINANCE_WARN_THRESHOLD:
+        print(f"[WARN] {split_name}: unknown+silence share={dom*100:.2f}% (> {DOMINANCE_WARN_THRESHOLD*100:.0f}%).")
+    return out
+
+
+def main() -> None:
     print(f"Using dataset at: {DATA_ROOT.resolve()}")
-
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(SEED)
 
-    val_set, test_set = load_split_lists()
+    # Buckets for all non-silence classes from real wav files.
+    buckets = {name: [] for name in CLASS_NAMES if name != "silence"}
 
-    # We store data for each split in lists first
-    features = {"train": [], "val": [], "test": []}
-    labels = {"train": [], "val": [], "test": []}
-
-    # 1) Process all wav files except background noise
     wav_paths = sorted(DATA_ROOT.rglob("*.wav"))
-
     print(f"Found {len(wav_paths)} wav files.")
-
     for wav_path in tqdm(wav_paths, desc="Processing audio"):
-        # Skip background noise folder for now
         if wav_path.parent.name == "_background_noise_":
             continue
-
-        # e.g. 'yes/0a7c2a8d_nohash_0.wav'
-        rel_path = wav_path.relative_to(DATA_ROOT).as_posix()
-
-        split = get_split(rel_path, val_set, test_set)
-
-        word = wav_path.parent.name
-        if word in KEYWORDS:
-            label_name = word
-        else:
-            label_name = "unknown"
-
-        label_id = CLASS_TO_ID[label_name]
-
+        label = label_name_from_word(wav_path.parent.name)
+        if label == "silence":
+            continue
         audio = load_and_pad(wav_path)
-        logmel = compute_logmel(audio)  # shape (40, T)
+        buckets[label].append(compute_logmel(audio))
 
-        features[split].append(logmel)
-        labels[split].append(label_id)
+    # Build splits for all real classes first.
+    features = {s: [] for s in SPLIT_ORDER}
+    labels = {s: [] for s in SPLIT_ORDER}
+    split_source_counts = {s: {name: 0 for name in CLASS_NAMES} for s in SPLIT_ORDER}
 
-    # 2) Synthetic silence examples (1000 per split)
-    silence_per_split = 1000
-    print(f"Adding {silence_per_split} silence examples per split...")
+    for class_name in CLASS_NAMES:
+        if class_name == "silence":
+            continue
+        items = buckets[class_name]
+        rng.shuffle(items)
+        counts = split_counts(len(items))
+        start = 0
+        for split in SPLIT_ORDER:
+            n = counts[split]
+            part = items[start : start + n]
+            start += n
+            features[split].extend(part)
+            label_id = CLASS_TO_ID[class_name]
+            labels[split].extend([label_id] * len(part))
+            split_source_counts[split][class_name] += len(part)
 
-    for split in ["train", "val", "test"]:
-        for _ in range(silence_per_split):
-            audio = generate_silence_example()
-            logmel = compute_logmel(audio)
-            features[split].append(logmel)
-            labels[split].append(CLASS_TO_ID["silence"])
+    # Cap unknown/silence to median of regular keyword counts per split.
+    for split in SPLIT_ORDER:
+        regular_counts = [split_source_counts[split][k] for k in REGULAR_KEYWORDS]
+        target_cap = int(np.median(np.array(regular_counts, dtype=np.int64)))
 
-    # 3) Turn lists into arrays
-    x_train = np.stack(features["train"], axis=0)
-    y_train = np.array(labels["train"], dtype=np.int64)
+        unk_items = [x for x, y in zip(features[split], labels[split]) if y == CLASS_TO_ID["unknown"]]
+        non_unk_x = [x for x, y in zip(features[split], labels[split]) if y != CLASS_TO_ID["unknown"]]
+        non_unk_y = [y for y in labels[split] if y != CLASS_TO_ID["unknown"]]
+        unk_kept = sample_list(unk_items, target_cap, rng)
 
-    x_val = np.stack(features["val"], axis=0)
-    y_val = np.array(labels["val"], dtype=np.int64)
+        # Generate synthetic silence and cap to target.
+        sil_items = [compute_logmel(generate_silence_example()) for _ in range(target_cap)]
+        sil_labels = [CLASS_TO_ID["silence"]] * len(sil_items)
 
-    x_test = np.stack(features["test"], axis=0)
-    y_test = np.array(labels["test"], dtype=np.int64)
+        new_x = non_unk_x + unk_kept + sil_items
+        new_y = non_unk_y + [CLASS_TO_ID["unknown"]] * len(unk_kept) + sil_labels
+        p = rng.permutation(len(new_y))
+        features[split] = [new_x[i] for i in p]
+        labels[split] = [new_y[i] for i in p]
 
-    print("Shapes BEFORE normalisation:")
-    print("  Train:", x_train.shape)
-    print("  Val:  ", x_val.shape)
-    print("  Test: ", x_test.shape)
+    arrays = {}
+    for split in SPLIT_ORDER:
+        x = np.stack(features[split], axis=0).astype(np.float32)
+        y = np.array(labels[split], dtype=np.int64)
+        arrays[split] = {"x": x, "y": y}
 
-    # 4) Compute mean/std from TRAIN only (for normalisation)
-    mean = x_train.mean(axis=(0, 2), keepdims=True)
-    std = x_train.std(axis=(0, 2), keepdims=True) + 1e-6
+    # Normalize using train split statistics.
+    mean = arrays["train"]["x"].mean(axis=(0, 2), keepdims=True)
+    std = arrays["train"]["x"].std(axis=(0, 2), keepdims=True) + 1e-6
+    for split in SPLIT_ORDER:
+        arrays[split]["x"] = (arrays[split]["x"] - mean) / std
 
-    # 5) Apply normalisation
-    x_train = (x_train - mean) / std
-    x_val = (x_val - mean) / std
-    x_test = (x_test - mean) / std
+    np.savez_compressed(OUT_DIR / "logmel_train.npz", x=arrays["train"]["x"], y=arrays["train"]["y"])
+    np.savez_compressed(OUT_DIR / "logmel_val.npz", x=arrays["val"]["x"], y=arrays["val"]["y"])
+    np.savez_compressed(OUT_DIR / "logmel_test.npz", x=arrays["test"]["x"], y=arrays["test"]["y"])
+    # Keep CL file for compatibility; aligned to training split policy.
+    np.savez_compressed(OUT_DIR / "logmel_cl_train.npz", x=arrays["train"]["x"], y=arrays["train"]["y"])
 
-    # 6) Save everything to .npz files
-    np.savez_compressed(OUT_DIR / "logmel_train.npz", x=x_train, y=y_train)
-    np.savez_compressed(OUT_DIR / "logmel_val.npz", x=x_val, y=y_val)
-    np.savez_compressed(OUT_DIR / "logmel_test.npz", x=x_test, y=y_test)
-    np.savez_compressed(OUT_DIR / "logmel_stats.npz",
-                        mean=mean, std=std, class_names=np.array(CLASS_NAMES))
+    split_names = np.array(SPLIT_ORDER)
+    split_class_counts = np.stack(
+        [class_counts(arrays[s]["y"], len(CLASS_NAMES)) for s in SPLIT_ORDER], axis=0
+    )
+    np.savez_compressed(
+        OUT_DIR / "logmel_stats.npz",
+        mean=mean,
+        std=std,
+        class_names=np.array(CLASS_NAMES),
+        base_keywords=np.array(BASE_KEYWORDS),
+        new_keywords=np.array(NEW_KEYWORDS),
+        split_names=split_names,
+        split_class_counts=split_class_counts,
+    )
 
-    print("Saved files in:", OUT_DIR.resolve())
+    stats_json = {
+        "seed": SEED,
+        "split_ratios": SPLIT_RATIOS,
+        "class_names": CLASS_NAMES,
+        "splits": {},
+    }
+    for split in SPLIT_ORDER:
+        stats_json["splits"][split] = print_split_stats(split, arrays[split]["y"])
+
+    with (OUT_DIR / "logmel_stats.json").open("w", encoding="utf-8") as f:
+        json.dump(stats_json, f, indent=2, ensure_ascii=True)
+
+    print(f"\nSaved files in: {OUT_DIR.resolve()}")
     print("Done!")
+
 
 if __name__ == "__main__":
     main()

@@ -2,8 +2,13 @@ import keras
 from keras import layers
 import tensorflow as tf
 
+if hasattr(keras, "saving") and hasattr(keras.saving, "register_keras_serializable"):
+    register_keras_serializable = keras.saving.register_keras_serializable
+else:
+    register_keras_serializable = tf.keras.utils.register_keras_serializable
 
-@keras.saving.register_keras_serializable(package="BNN")
+
+@register_keras_serializable(package="BNN")
 class WeightClip(keras.constraints.Constraint):
     def __init__(self, min_value=-1.0, max_value=1.0):
         self.min_value = float(min_value)
@@ -29,7 +34,7 @@ def binary_activation(x):
     return y, grad
 
 
-@keras.saving.register_keras_serializable(package="BNN")
+@register_keras_serializable(package="BNN")
 class BinaryActivation(layers.Layer):
     def call(self, inputs):
         return binary_activation(inputs)
@@ -38,62 +43,7 @@ class BinaryActivation(layers.Layer):
         return super().get_config()
 
 
-@keras.saving.register_keras_serializable(package="BNN")
-class BinaryDense(layers.Layer):
-    def __init__(
-        self,
-        units,
-        activation=None,
-        use_bias=True,
-        kernel_initializer="glorot_uniform",
-        bias_initializer="zeros",
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.units = int(units)
-        self.activation = keras.activations.get(activation)
-        self.use_bias = bool(use_bias)
-        self.kernel_initializer = keras.initializers.get(kernel_initializer)
-        self.bias_initializer = keras.initializers.get(bias_initializer)
-
-    def build(self, input_shape):
-        self.kernel = self.add_weight(
-            shape=(int(input_shape[-1]), self.units),
-            initializer=self.kernel_initializer,
-            trainable=True,
-            name="kernel",
-        )
-        if self.use_bias:
-            self.bias = self.add_weight(
-                shape=(self.units,),
-                initializer=self.bias_initializer,
-                trainable=True,
-                name="bias",
-            )
-        else:
-            self.bias = None
-
-    def call(self, inputs):
-        x = tf.matmul(inputs, self.kernel)
-        if self.bias is not None:
-            x = x + self.bias
-        if self.activation is not None:
-            x = self.activation(x)
-        return x
-
-    def get_config(self):
-        cfg = super().get_config()
-        cfg.update({
-            "units": self.units,
-            "activation": keras.activations.serialize(self.activation),
-            "use_bias": self.use_bias,
-            "kernel_initializer": keras.initializers.serialize(self.kernel_initializer),
-            "bias_initializer": keras.initializers.serialize(self.bias_initializer),
-        })
-        return cfg
-
-
-@keras.saving.register_keras_serializable(package="BNN")
+@register_keras_serializable(package="BNN")
 class BinaryConv2D(layers.Layer):
     def __init__(self, filters, kernel_size, strides=(1, 1), padding="same", **kwargs):
         super().__init__(**kwargs)
