@@ -3,6 +3,26 @@ import tensorflow as tf
 from keras import layers, models
 from pathlib import Path
 
+BASE_PRETRAIN_CLASSES = [
+    "yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go", "unknown", "silence"
+]
+
+
+def restrict_to_base_classes(x, y, class_names):
+    class_names_list = [str(c) for c in class_names.tolist()]
+    missing = [name for name in BASE_PRETRAIN_CLASSES if name not in class_names_list]
+    if missing:
+        raise ValueError(f"Missing required base classes in stats: {missing}")
+
+    base_old_ids = np.array([class_names_list.index(name) for name in BASE_PRETRAIN_CLASSES], dtype=np.int32)
+    remap = np.full(len(class_names_list), -1, dtype=np.int32)
+    remap[base_old_ids] = np.arange(len(BASE_PRETRAIN_CLASSES), dtype=np.int32)
+
+    keep = remap[y] >= 0
+    x_out = x[keep]
+    y_out = remap[y[keep]]
+    return x_out, y_out
+
 
 # 1. Load preprocessed data
 # Paths to .npz files
@@ -23,12 +43,16 @@ x_val, y_val     = val_data["x"], val_data["y"]
 x_test, y_test   = test_data["x"], test_data["y"]
 
 class_names = stats_data["class_names"]
-num_classes = len(class_names)
+num_classes = len(BASE_PRETRAIN_CLASSES)
+
+x_train, y_train = restrict_to_base_classes(x_train, y_train, class_names)
+x_val, y_val = restrict_to_base_classes(x_val, y_val, class_names)
+x_test, y_test = restrict_to_base_classes(x_test, y_test, class_names)
 
 print(f" x_train shape: {x_train.shape}")
 print(f" y_train shape: {y_train.shape}")
 print(f" Number of classes: {num_classes}")
-print(f" Classes: {class_names}")
+print(f" Classes: {BASE_PRETRAIN_CLASSES}")
 
 # 2. Channel dimension for CNN
 #(40, 101, 1)
@@ -60,6 +84,14 @@ model = models.Sequential([
     layers.MaxPooling2D((2, 2)),
     # Block 2
     layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D((2, 2)),
+    # Block 2
+    layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
+    layers.BatchNormalization(),
+    layers.MaxPooling2D((2, 2)),
+    # Block 3
+    layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
     layers.MaxPooling2D((2, 2)),
     # Block 3

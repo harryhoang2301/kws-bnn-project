@@ -3,10 +3,14 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import tensorflow as tf
 from keras import layers, models
-from bnn_layers import BinaryActivation, BinaryDense, BinaryConv2D
+from bnn_layers import BinaryActivation, BinaryConv2D
+
+BASE_PRETRAIN_CLASSES = [
+    "yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go", "unknown", "silence"
+]
 
 # ----------------------------------------------
-# BNN model (weight and activation binarization)
+# BNN model (weight and activation binarisation)
 # ----------------------------------------------
 
 def build_bnn_model(num_classes):
@@ -19,19 +23,31 @@ def build_bnn_model(num_classes):
 
     # Block 2 (binary conv)
     x = BinaryConv2D(32, (3, 3), padding="same")(x)
-    x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
+    x = layers.BatchNormalization()(x)
+
+    # Block 2 (binary conv)
+    x = BinaryConv2D(32, (3, 3), padding="same")(x)
+    x = BinaryActivation()(x)
+    x = layers.AvgPool2D((2, 2))(x)
+    x = layers.BatchNormalization()(x)
 
     # Block 3 (binary conv)
     x = BinaryConv2D(64, (3, 3), padding="same")(x)
-    x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
+    x = layers.BatchNormalization()(x)
+
+    # Block 3 (binary conv)
+    x = BinaryConv2D(64, (3, 3), padding="same")(x)
+    x = BinaryActivation()(x)
+    x = layers.AvgPool2D((2, 2))(x)
+    x = layers.BatchNormalization()(x)
 
     # Classifier
     x = layers.Flatten()(x)
-    x = BinaryDense(128, activation=None)(x)
+    x = layers.Dense(128 , activation=None)(x)
     x = layers.BatchNormalization()(x)
     x = layers.ReLU()(x)
 
@@ -53,6 +69,22 @@ def load_data(path, keys, allow_pickle=False):
         ) from exc
 
 
+def restrict_to_base_classes(x, y, class_names):
+    class_names_list = [str(c) for c in class_names.tolist()]
+    missing = [name for name in BASE_PRETRAIN_CLASSES if name not in class_names_list]
+    if missing:
+        raise ValueError(f"Missing required base classes in stats: {missing}")
+
+    base_old_ids = np.array([class_names_list.index(name) for name in BASE_PRETRAIN_CLASSES], dtype=np.int32)
+    remap = np.full(len(class_names_list), -1, dtype=np.int32)
+    remap[base_old_ids] = np.arange(len(BASE_PRETRAIN_CLASSES), dtype=np.int32)
+
+    keep = remap[y] >= 0
+    x_out = x[keep]
+    y_out = remap[y[keep]]
+    return x_out, y_out
+
+
 def main():
     # Load data
     train_path = Path("data/processed/logmel_train.npz")
@@ -66,7 +98,11 @@ def main():
     x_val, y_val = load_data(val_path, ("x", "y"))
     x_test, y_test = load_data(test_path, ("x", "y"))
     (class_names,) = load_data(stats_path, ("class_names",), allow_pickle=True)
-    num_classes = len(class_names)
+    num_classes = len(BASE_PRETRAIN_CLASSES)
+
+    x_train, y_train = restrict_to_base_classes(x_train, y_train, class_names)
+    x_val, y_val = restrict_to_base_classes(x_val, y_val, class_names)
+    x_test, y_test = restrict_to_base_classes(x_test, y_test, class_names)
 
     # Add channel dimension
     x_train = x_train[..., np.newaxis].astype("float32")
@@ -78,13 +114,15 @@ def main():
     y_test = y_test.astype("int32")
 
     print("[INFO] Data loaded successfully.")
+    print(f"[INFO] Base pretrain classes ({num_classes}): {BASE_PRETRAIN_CLASSES}")
+    print(f"[INFO] Filtered sizes -> train: {len(y_train)}, val: {len(y_val)}, test: {len(y_test)}")
 
     # Build and train BNN
     model = build_bnn_model(num_classes)
     model.summary()
 
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=1e-3,
+        learning_rate=1e-4, 
         epsilon=1e-5,   # slightly smaller eps helps BNN stability
     )
 
@@ -95,7 +133,7 @@ def main():
     )
 
     batch_size = 64
-    epochs = 20
+    epochs = 50
 
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor="val_accuracy",
