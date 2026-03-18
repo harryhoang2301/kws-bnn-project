@@ -24,7 +24,7 @@ def restrict_to_base_classes(x, y, class_names):
     return x_out, y_out
 
 
-# 1. Load preprocessed data
+# Load preprocessed data
 # Paths to .npz files
 TRAIN_PATH = Path("data/processed/logmel_train.npz")
 VAL_PATH   = Path("data/processed/logmel_val.npz")
@@ -54,7 +54,7 @@ print(f" y_train shape: {y_train.shape}")
 print(f" Number of classes: {num_classes}")
 print(f" Classes: {BASE_PRETRAIN_CLASSES}")
 
-# 2. Channel dimension for CNN
+# Channel dimension for CNN
 #(40, 101, 1)
 x_train = x_train[..., np.newaxis].astype("float32")
 x_val   = x_val[..., np.newaxis].astype("float32")
@@ -70,7 +70,7 @@ y_train = y_train.astype("int32")
 y_val   = y_val.astype("int32")
 y_test  = y_test.astype("int32")
 
-# 3. Building simple CNN model
+# Building simple CNN model
 # Input:  (40, 101, 1)
 # Output: probabilities over num_classes
 
@@ -81,12 +81,11 @@ model = models.Sequential([
     # Block 1
     layers.Conv2D(16, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
-    layers.MaxPooling2D((2, 2)),
     # Block 2
     layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
     layers.MaxPooling2D((2, 2)),
-    # Block 2
+    # Second Block 2 
     layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
     layers.MaxPooling2D((2, 2)),
@@ -94,7 +93,7 @@ model = models.Sequential([
     layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
     layers.MaxPooling2D((2, 2)),
-    # Block 3
+    # Second Block 3
     layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
     layers.BatchNormalization(),
     layers.MaxPooling2D((2, 2)),
@@ -107,20 +106,20 @@ model = models.Sequential([
 
 model.summary()
 
-# 4. Compile the model
+# Compile the model
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
     loss="sparse_categorical_crossentropy",   # because labels are integers
     metrics=["accuracy"],
 )
 
-# 5. Train the model
+# Train the model
 batch_size = 64
-epochs = 20
+epochs = 50
 
 early_stop = tf.keras.callbacks.EarlyStopping(
     monitor="val_accuracy",
-    patience=5,              # stop if val accuracy doesn't improve for 5 epochs
+    patience=10,              # stop if val accuracy doesn't improve for 10 epochs
     restore_best_weights=True,
 )
 
@@ -135,13 +134,13 @@ history = model.fit(
     callbacks=[early_stop],
 )
 
-# 6. Evaluate on test set
+# Evaluate on test set
 print("Evaluating on test set...")
 test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
 print(f"[RESULT] Test accuracy: {test_acc * 100:.2f}%")
 print(f"[RESULT] Test loss: {test_loss:.4f}")
 
-# 7. Save the model
+# Save the model
 MODEL_DIR = Path("models")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_PATH = MODEL_DIR / "cnn_kws.keras"

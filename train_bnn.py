@@ -26,25 +26,21 @@ def build_bnn_model(num_classes):
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
     x = layers.BatchNormalization()(x)
-
-    # Block 2 (binary conv)
+    # Second Block 2 (binary conv)
     x = BinaryConv2D(32, (3, 3), padding="same")(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
     x = layers.BatchNormalization()(x)
-
     # Block 3 (binary conv)
     x = BinaryConv2D(64, (3, 3), padding="same")(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
     x = layers.BatchNormalization()(x)
-
-    # Block 3 (binary conv)
+    #  Second Block 3 (binary conv)
     x = BinaryConv2D(64, (3, 3), padding="same")(x)
     x = BinaryActivation()(x)
     x = layers.AvgPool2D((2, 2))(x)
     x = layers.BatchNormalization()(x)
-
     # Classifier
     x = layers.Flatten()(x)
     x = layers.Dense(128 , activation=None)(x)
@@ -55,10 +51,6 @@ def build_bnn_model(num_classes):
     return models.Model(inputs, outputs)
 
 def load_data(path, keys, allow_pickle=False):
-    """
-    Eagerly load requested keys from .npz and close the zip file immediately.
-    This avoids lazy reads later in training and surfaces corruption early.
-    """
     try:
         with np.load(path, allow_pickle=allow_pickle) as data:
             return tuple(np.array(data[k]) for k in keys)
@@ -122,7 +114,7 @@ def main():
     model.summary()
 
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=1e-4, 
+        learning_rate=3e-4, 
         epsilon=1e-5,   # slightly smaller eps helps BNN stability
     )
 
