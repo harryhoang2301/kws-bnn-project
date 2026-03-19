@@ -1,3 +1,5 @@
+import argparse
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -20,7 +22,6 @@ def build_bnn_model(num_classes):
     x = layers.Conv2D(16, (3, 3), padding="same", use_bias=False)(inputs)
     x = layers.BatchNormalization()(x)
     x = BinaryActivation()(x)
-
     # Block 2 (binary conv)
     x = BinaryConv2D(32, (3, 3), padding="same")(x)
     x = BinaryActivation()(x)
@@ -61,6 +62,13 @@ def load_data(path, keys, allow_pickle=False):
         ) from exc
 
 
+def set_global_seed(seed):
+    """Set Python, NumPy, and TensorFlow seeds for reproducible runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
 def restrict_to_base_classes(x, y, class_names):
     class_names_list = [str(c) for c in class_names.tolist()]
     missing = [name for name in BASE_PRETRAIN_CLASSES if name not in class_names_list]
@@ -77,14 +85,17 @@ def restrict_to_base_classes(x, y, class_names):
     return x_out, y_out
 
 
-def main():
+def run_training(seed=0, save_artifacts=True, plot_curves=True, verbose=1):
+    # Keep all training choices fixed except the random seed.
+    set_global_seed(seed)
+
     # Load data
     train_path = Path("data/processed/logmel_train.npz")
     val_path = Path("data/processed/logmel_val.npz")
     test_path = Path("data/processed/logmel_test.npz")
     stats_path = Path("data/processed/logmel_stats.npz")
 
-    print("[INFO] Loading data...")
+    print(f"[INFO] Loading data for BNN (seed={seed})...")
 
     x_train, y_train = load_data(train_path, ("x", "y"))
     x_val, y_val = load_data(val_path, ("x", "y"))
@@ -111,7 +122,8 @@ def main():
 
     # Build and train BNN
     model = build_bnn_model(num_classes)
-    model.summary()
+    if verbose:
+        model.summary()
 
     optimizer = tf.keras.optimizers.Adam(
         learning_rate=3e-4, 
@@ -139,25 +151,30 @@ def main():
         batch_size=batch_size,
         epochs=epochs,
         callbacks=[early_stop],
+        verbose=verbose,
     )
 
+    val_eval_loss, val_eval_acc = model.evaluate(x_val, y_val, verbose=0)
     print("[INFO] Evaluating BNN on test set...")
     test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+    print(f"[RESULT] BNN Val accuracy: {val_eval_acc * 100:.2f}%")
+    print(f"[RESULT] BNN Val loss: {val_eval_loss:.4f}")
     print(f"[RESULT] BNN Test accuracy: {test_acc * 100:.2f}%")
     print(f"[RESULT] BNN Test loss: {test_loss:.4f}")
 
-    # save the BNN
-    model_dir = Path("models")
-    model_dir.mkdir(parents=True, exist_ok=True)
-    model.save_weights(model_dir / "bnn_kws_v2_registered.weights.h5")
-    print(f"[INFO] Saved BNN weights to: {(model_dir / 'bnn_kws_v2_registered.weights.h5').resolve()}")
+    if save_artifacts:
+        # Save the BNN weights.
+        model_dir = Path("models")
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model.save_weights(model_dir / "bnn_kws_v2_registered.weights.h5")
+        print(f"[INFO] Saved BNN weights to: {(model_dir / 'bnn_kws_v2_registered.weights.h5').resolve()}")
 
-    # Plot training curves (BNN)
+    # Plot training curves (BNN) when requested.
     history_dict = history.history
     acc = history_dict.get("accuracy", [])
-    val_acc = history_dict.get("val_accuracy", [])
+    val_acc_hist = history_dict.get("val_accuracy", [])
     loss = history_dict.get("loss", [])
-    val_loss = history_dict.get("val_loss", [])
+    val_loss_hist = history_dict.get("val_loss", [])
 
     epochs_range = range(1, len(acc) + 1)
 
@@ -166,7 +183,7 @@ def main():
     # Accuracy plot
     plt.subplot(1, 2, 1)
     plt.plot(epochs_range, acc, label="Train Accuracy")
-    plt.plot(epochs_range, val_acc, label="Val Accuracy")
+    plt.plot(epochs_range, val_acc_hist, label="Val Accuracy")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.title("BNN Training vs Validation Accuracy")
@@ -176,7 +193,7 @@ def main():
     # Loss plot
     plt.subplot(1, 2, 2)
     plt.plot(epochs_range, loss, label="Train Loss")
-    plt.plot(epochs_range, val_loss, label="Val Loss")
+    plt.plot(epochs_range, val_loss_hist, label="Val Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("BNN Training vs Validation Loss")
@@ -184,12 +201,38 @@ def main():
     plt.grid(True)
 
     plt.tight_layout()
-    plt.show()
-
     fig_dir = Path("figures")
     fig_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(fig_dir / "bnn_training_curves.png", dpi=300)
-    print(f"[INFO] Saved BNN training curves to: {(fig_dir / 'bnn_training_curves.png').resolve()}")
+    if plot_curves:
+        plt.savefig(fig_dir / "bnn_training_curves.png", dpi=300)
+        print(f"[INFO] Saved BNN training curves to: {(fig_dir / 'bnn_training_curves.png').resolve()}")
+        plt.show()
+    plt.close()
+
+    return {
+        "model_name": "bnn",
+        "seed": int(seed),
+        "validation_accuracy": float(val_eval_acc),
+        "validation_loss": float(val_eval_loss),
+        "test_accuracy": float(test_acc),
+        "test_loss": float(test_loss),
+        "parameter_count": int(model.count_params()),
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train and evaluate the main BNN model.")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for Python, NumPy, and TensorFlow.")
+    parser.add_argument("--no_plot", action="store_true", help="Disable training-curve plotting.")
+    parser.add_argument("--no_save", action="store_true", help="Disable saving trained model weights.")
+    args = parser.parse_args()
+
+    run_training(
+        seed=args.seed,
+        save_artifacts=not args.no_save,
+        plot_curves=not args.no_plot,
+        verbose=1,
+    )
 
 
 if __name__ == "__main__":

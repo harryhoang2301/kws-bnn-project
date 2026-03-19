@@ -1,11 +1,33 @@
+import argparse
+import random
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from keras import layers, models
-from pathlib import Path
 
 BASE_PRETRAIN_CLASSES = [
     "yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go", "unknown", "silence"
 ]
+
+
+def set_global_seed(seed):
+    """Set Python, NumPy, and TensorFlow seeds for reproducible runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
+def load_data(path, keys, allow_pickle=False):
+    try:
+        with np.load(path, allow_pickle=allow_pickle) as data:
+            return tuple(np.array(data[k]) for k in keys)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to read '{path}'. The file may be incomplete/corrupted. "
+            "Try regenerating processed data with preprocess.py."
+        ) from exc
 
 
 def restrict_to_base_classes(x, y, class_names):
@@ -24,162 +46,182 @@ def restrict_to_base_classes(x, y, class_names):
     return x_out, y_out
 
 
-# Load preprocessed data
-# Paths to .npz files
-TRAIN_PATH = Path("data/processed/logmel_train.npz")
-VAL_PATH   = Path("data/processed/logmel_val.npz")
-TEST_PATH  = Path("data/processed/logmel_test.npz")
-STATS_PATH = Path("data/processed/logmel_stats.npz")
+def build_cnn_model(num_classes):
+    return models.Sequential(
+        [
+            layers.Input(shape=(40, 101, 1)),
+            # Block 1
+            layers.Conv2D(16, (3, 3), padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            # Block 2
+            layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            # Second Block 2
+            layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            # Block 3
+            layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            # Second Block 3
+            layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+            layers.BatchNormalization(),
+            layers.MaxPooling2D((2, 2)),
+            # Classification Layers
+            layers.Flatten(),
+            layers.Dense(128, activation="relu"),
+            layers.Dropout(0.3),
+            layers.Dense(num_classes, activation="softmax"),
+        ]
+    )
 
-print("[INFO] Loading data...")
 
-train_data = np.load(TRAIN_PATH)
-val_data   = np.load(VAL_PATH)
-test_data  = np.load(TEST_PATH)
-stats_data = np.load(STATS_PATH, allow_pickle=True)
+def run_training(seed=0, save_artifacts=True, plot_curves=True, verbose=1):
+    # Keep all training choices fixed except the random seed.
+    set_global_seed(seed)
 
-x_train, y_train = train_data["x"], train_data["y"]  # shapes: (N, 40, 101)
-x_val, y_val     = val_data["x"], val_data["y"]
-x_test, y_test   = test_data["x"], test_data["y"]
+    # Paths to .npz files
+    train_path = Path("data/processed/logmel_train.npz")
+    val_path = Path("data/processed/logmel_val.npz")
+    test_path = Path("data/processed/logmel_test.npz")
+    stats_path = Path("data/processed/logmel_stats.npz")
 
-class_names = stats_data["class_names"]
-num_classes = len(BASE_PRETRAIN_CLASSES)
+    print(f"[INFO] Loading data for CNN (seed={seed})...")
+    x_train, y_train = load_data(train_path, ("x", "y"))
+    x_val, y_val = load_data(val_path, ("x", "y"))
+    x_test, y_test = load_data(test_path, ("x", "y"))
+    (class_names,) = load_data(stats_path, ("class_names",), allow_pickle=True)
 
-x_train, y_train = restrict_to_base_classes(x_train, y_train, class_names)
-x_val, y_val = restrict_to_base_classes(x_val, y_val, class_names)
-x_test, y_test = restrict_to_base_classes(x_test, y_test, class_names)
+    num_classes = len(BASE_PRETRAIN_CLASSES)
+    x_train, y_train = restrict_to_base_classes(x_train, y_train, class_names)
+    x_val, y_val = restrict_to_base_classes(x_val, y_val, class_names)
+    x_test, y_test = restrict_to_base_classes(x_test, y_test, class_names)
 
-print(f" x_train shape: {x_train.shape}")
-print(f" y_train shape: {y_train.shape}")
-print(f" Number of classes: {num_classes}")
-print(f" Classes: {BASE_PRETRAIN_CLASSES}")
+    print(f"[INFO] x_train shape: {x_train.shape}")
+    print(f"[INFO] y_train shape: {y_train.shape}")
+    print(f"[INFO] Number of classes: {num_classes}")
+    print(f"[INFO] Classes: {BASE_PRETRAIN_CLASSES}")
 
-# Channel dimension for CNN
-#(40, 101, 1)
-x_train = x_train[..., np.newaxis].astype("float32")
-x_val   = x_val[..., np.newaxis].astype("float32")
-x_test  = x_test[..., np.newaxis].astype("float32")
+    # Add channel dimension for CNN.
+    x_train = x_train[..., np.newaxis].astype("float32")
+    x_val = x_val[..., np.newaxis].astype("float32")
+    x_test = x_test[..., np.newaxis].astype("float32")
 
-print(f" After adding channel dimension:")
-print(f"       x_train: {x_train.shape}")
-print(f"       x_val:   {x_val.shape}")
-print(f"       x_test:  {x_test.shape}")
+    y_train = y_train.astype("int32")
+    y_val = y_val.astype("int32")
+    y_test = y_test.astype("int32")
 
-# Labels are integers, for sparse_categorical_crossentropy
-y_train = y_train.astype("int32")
-y_val   = y_val.astype("int32")
-y_test  = y_test.astype("int32")
+    print(f"[INFO] Channelized x_train: {x_train.shape}")
+    print(f"[INFO] Channelized x_val:   {x_val.shape}")
+    print(f"[INFO] Channelized x_test:  {x_test.shape}")
 
-# Building simple CNN model
-# Input:  (40, 101, 1)
-# Output: probabilities over num_classes
+    model = build_cnn_model(num_classes)
+    if verbose:
+        model.summary()
 
-print("Building model...")
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
 
-model = models.Sequential([
-    layers.Input(shape=(40, 101, 1)),
-    # Block 1
-    layers.Conv2D(16, (3, 3), padding="same", activation="relu"),
-    layers.BatchNormalization(),
-    # Block 2
-    layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D((2, 2)),
-    # Second Block 2 
-    layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D((2, 2)),
-    # Block 3
-    layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D((2, 2)),
-    # Second Block 3
-    layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
-    layers.BatchNormalization(),
-    layers.MaxPooling2D((2, 2)),
-    # Classification Layers
-    layers.Flatten(),
-    layers.Dense(128, activation="relu"),
-    layers.Dropout(0.3),
-    layers.Dense(num_classes, activation="softmax"),
-])
+    batch_size = 64
+    epochs = 50
 
-model.summary()
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor="val_accuracy",
+        patience=10,
+        restore_best_weights=True,
+    )
 
-# Compile the model
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-    loss="sparse_categorical_crossentropy",   # because labels are integers
-    metrics=["accuracy"],
-)
+    print("[INFO] Starting CNN training...")
+    history = model.fit(
+        x_train,
+        y_train,
+        validation_data=(x_val, y_val),
+        batch_size=batch_size,
+        epochs=epochs,
+        callbacks=[early_stop],
+        verbose=verbose,
+    )
 
-# Train the model
-batch_size = 64
-epochs = 50
+    val_eval_loss, val_eval_acc = model.evaluate(x_val, y_val, verbose=0)
+    print("[INFO] Evaluating CNN on test set...")
+    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+    print(f"[RESULT] CNN Val accuracy: {val_eval_acc * 100:.2f}%")
+    print(f"[RESULT] CNN Val loss: {val_eval_loss:.4f}")
+    print(f"[RESULT] CNN Test accuracy: {test_acc * 100:.2f}%")
+    print(f"[RESULT] CNN Test loss: {test_loss:.4f}")
 
-early_stop = tf.keras.callbacks.EarlyStopping(
-    monitor="val_accuracy",
-    patience=10,              # stop if val accuracy doesn't improve for 10 epochs
-    restore_best_weights=True,
-)
+    if save_artifacts:
+        model_dir = Path("models")
+        model_dir.mkdir(parents=True, exist_ok=True)
+        model_path = model_dir / "cnn_kws.keras"
+        model.save(model_path)
+        print(f"[INFO] Saved CNN model to: {model_path.resolve()}")
 
-print("Starting training...")
+    history_dict = history.history
+    acc = history_dict.get("accuracy", [])
+    val_acc_hist = history_dict.get("val_accuracy", [])
+    loss = history_dict.get("loss", [])
+    val_loss_hist = history_dict.get("val_loss", [])
+    epochs_range = range(1, len(acc) + 1)
 
-history = model.fit(
-    x_train,
-    y_train,
-    validation_data=(x_val, y_val),
-    batch_size=batch_size,
-    epochs=epochs,
-    callbacks=[early_stop],
-)
+    plt.figure(figsize=(10, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs_range, acc, label="Train Accuracy")
+    plt.plot(epochs_range, val_acc_hist, label="Validation Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title("Training vs Validation Accuracy")
+    plt.legend()
+    plt.grid(True)
 
-# Evaluate on test set
-print("Evaluating on test set...")
-test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
-print(f"[RESULT] Test accuracy: {test_acc * 100:.2f}%")
-print(f"[RESULT] Test loss: {test_loss:.4f}")
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs_range, loss, label="Train Loss")
+    plt.plot(epochs_range, val_loss_hist, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training vs Validation Loss")
+    plt.legend()
+    plt.grid(True)
 
-# Save the model
-MODEL_DIR = Path("models")
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-MODEL_PATH = MODEL_DIR / "cnn_kws.keras"
+    plt.tight_layout()
+    fig_dir = Path("figures")
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    if plot_curves:
+        plt.savefig(fig_dir / "cnn_training_curves.png", dpi=300)
+        print(f"[INFO] Saved CNN training curves to: {(fig_dir / 'cnn_training_curves.png').resolve()}")
+        plt.show()
+    plt.close()
 
-model.save(MODEL_PATH)
-print(f" Saved model to: {MODEL_PATH.resolve()}")
+    return {
+        "model_name": "cnn",
+        "seed": int(seed),
+        "validation_accuracy": float(val_eval_acc),
+        "validation_loss": float(val_eval_loss),
+        "test_accuracy": float(test_acc),
+        "test_loss": float(test_loss),
+        "parameter_count": int(model.count_params()),
+    }
 
-# Plot training curves
-import matplotlib.pyplot as plt
 
-history_dict = history.history
-acc      = history_dict.get("accuracy", [])
-val_acc  = history_dict.get("val_accuracy", [])
-loss     = history_dict.get("loss", [])
-val_loss = history_dict.get("val_loss", [])
+def main():
+    parser = argparse.ArgumentParser(description="Train and evaluate the main CNN model.")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for Python, NumPy, and TensorFlow.")
+    parser.add_argument("--no_plot", action="store_true", help="Disable training-curve plotting.")
+    parser.add_argument("--no_save", action="store_true", help="Disable saving trained model.")
+    args = parser.parse_args()
 
-epochs_range = range(1, len(acc) + 1)
+    run_training(
+        seed=args.seed,
+        save_artifacts=not args.no_save,
+        plot_curves=not args.no_plot,
+        verbose=1,
+    )
 
-plt.figure(figsize=(10, 4))
 
-# Accuracy plot
-plt.subplot(1, 2, 1)
-plt.plot(epochs_range, acc, label="Train Accuracy")
-plt.plot(epochs_range, val_acc, label="Validation Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.title("Training vs Validation Accuracy")
-plt.legend()
-plt.grid(True)
-
-# Loss
-plt.subplot(1, 2, 2)
-plt.plot(epochs_range, loss, label="Train Loss")
-plt.plot(epochs_range, val_loss, label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training vs Validation Loss")
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-plt.show()
+if __name__ == "__main__":
+    main()
